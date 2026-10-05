@@ -3,12 +3,12 @@
 "use client";
 import { replyTree, type ReplyNode } from '@/lib/reply-tree';
 import EmojiControl from "./emoji-control";
-import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { Thread, ThreadPage, Profile } from "@/lib/threads-types";
 async function api<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: "no-store", ...options });
   const data = await response.json();
+  if (data.authRequired) { window.location.replace("/login"); throw new Error("Please sign in again."); }
   if (!response.ok)
     throw new Error(data.error || "Something went wrong. Try again.");
   return data;
@@ -83,6 +83,13 @@ export default function Inbox() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setTheme(next);
   }, []);
+  async function logout() {
+    try {
+      const response = await fetch("/api/auth/logout", { method: "POST" });
+      if (!response.ok) throw new Error("Unable to sign out. Try again.");
+      window.location.replace("/login");
+    } catch (e) { setPostError((e as Error).message); }
+  }
   function toggleTheme() {
     const next = theme === "light" ? "dark" : "light";
     setTheme(next);
@@ -296,13 +303,13 @@ export default function Inbox() {
   return (
     <div className="shell" data-theme={theme}>
       <aside className="rail">
-        <Link className="brand" href="/" aria-label="Threads inbox">
-          @
-        </Link>
-        <Link className="rail-icon" href="/" title="Conversations" aria-label="Conversations">☰</Link>
+        <div className="brand" role="img" aria-label="Threads inbox">@</div>
+        <button className="rail-icon" type="button" title="Conversations" aria-label="Scroll conversation to top"
+          onClick={() => conversationScroll.current?.scrollTo({ top: 0, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth" })}>☰</button>
         <button className="rail-bottom theme-toggle" type="button" onClick={toggleTheme} aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`} title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>
           {theme === "light" ? "☾" : "☀"}
         </button>
+        <button type="button" className="logout-button" title="Sign out" aria-label="Sign out" disabled={busy} onClick={() => void logout()}>⇥</button>
       </aside>
       <main className="workspace">
         <div className="inbox">
@@ -375,7 +382,7 @@ export default function Inbox() {
           </section>
           <section className="conversation" aria-label="Selected conversation">
             <div className="pane-title">
-              <h2>Conversation</h2><button className="mobile-theme theme-toggle" onClick={toggleTheme} type="button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "☾" : "☀"}</button>
+              <h2>Conversation</h2><button className="mobile-logout logout-button" type="button" disabled={busy} onClick={() => void logout()} aria-label="Sign out">⇥</button><button className="mobile-theme theme-toggle" onClick={toggleTheme} type="button" aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}>{theme === "light" ? "☾" : "☀"}</button>
               {selected && (
                 <span className="badge">{replies.length} replies loaded</span>
               )}

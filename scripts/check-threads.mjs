@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
+import { createRequire } from 'node:module';
+const nativeRequire = createRequire(import.meta.url);
 function load(path, imports = {}) {
   const compiled = { exports: {} };
   const source = ts.transpileModule(readFileSync(path, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   new Function('require', 'module', 'exports', source)((name) => {
+    if (name.startsWith('node:')) return nativeRequire(name);
     if (name === 'server-only') return {};
     if (imports[name]) return imports[name];
     throw new Error(`Unexpected import: ${name}`);
@@ -23,7 +26,18 @@ const originalGeminiKey = process.env.GEMINI_API_KEY;
 process.env.GEMINI_API_KEY = 'test-gemini-key';
 process.env.THREADS_TOKEN = 'test-token';
 const threads = load('lib/threads.ts');
-const http = load('lib/threads-http.ts', { './threads': threads });
+const authEnv = Object.fromEntries(['AUTH_EMAIL', 'AUTH_PASSWORD_HASH', 'AUTH_SESSION_SECRET', 'AUTH_APP_ORIGIN'].map(key => [key, process.env[key]]));
+const { scryptSync } = nativeRequire('node:crypto');
+process.env.AUTH_EMAIL = 'test@example.com';
+process.env.AUTH_PASSWORD_HASH = `scrypt:${'a'.repeat(32)}:${scryptSync('test-password', 'a'.repeat(32), 64).toString('hex')}`;
+process.env.AUTH_SESSION_SECRET = 'test-signing-secret'.repeat(4);
+process.env.AUTH_APP_ORIGIN = 'https://private.example';
+const auth = load('lib/auth.ts');
+const session = auth.createSession();
+const cookie = `${auth.SESSION_COOKIE}=${session}`;
+const http = load('lib/threads-http.ts', { './threads': threads, './auth': auth });
+const login = load('app/api/auth/login/route.ts', { '@/lib/auth': auth, '@/lib/threads-http': http, '@/lib/threads': threads });
+const logout = load('app/api/auth/logout/route.ts', { '@/lib/auth': auth, '@/lib/threads-http': http });
 const routes = load('app/api/threads/route.ts', { '@/lib/threads': threads, '@/lib/threads-http': http });
 const gemini = load('lib/gemini.ts', { './threads': threads });
 const generationRoute = load('app/api/gemini/reply/route.ts', { '@/lib/threads': threads, '@/lib/threads-http': http, '@/lib/gemini': gemini });
@@ -36,16 +50,32 @@ globalThis.fetch = async (url, options) => {
 };
 const me = { id: '1', username: 'test' };
 const post = { id: '2', owner: { id: '1' }, is_reply: false };
-const postRequest = (body, origin = 'http://localhost:3000') => new Request('http://localhost:3000/api/threads', { method: 'POST', headers: { host: 'localhost:3000', origin, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+const postRequest = (body, origin = 'http://localhost:3000') => new Request('http://localhost:3000/api/threads', { method: 'POST', headers: { host: 'localhost:3000', cookie, origin, 'content-type': 'application/json' }, body: JSON.stringify(body) });
 try {
+  assert.ok(auth.validSession(session));
+  assert.equal(auth.validSession(session + 'x'), false);
+  assert.equal(auth.validSession(auth.createSession(Date.now() - 31 * 86400000)), false);
+  assert.equal(auth.validSession(undefined), false);
+  assert.equal(await auth.checkCredentials('TEST@example.com', 'test-password'), true);
+  assert.equal(await auth.checkCredentials('test@example.com', 'wrong'), false);
+  let denied = await routes.GET(new Request('http://localhost:3000/api/threads', { headers: { host: 'localhost:3000' } }));
+  assert.equal(denied.status, 401); assert.equal((await denied.json()).authRequired, true); assert.equal(calls.length, 0);
+  const loginRequest = (password, origin = 'https://private.example') => new Request('https://private.example/api/auth/login', { method: 'POST', headers: { host: 'private.example', origin, 'content-type': 'application/json' }, body: JSON.stringify({ email: 'test@example.com', password }) });
+  let signedIn = await login.POST(loginRequest('wrong')); assert.equal(signedIn.status, 401);
+  signedIn = await login.POST(loginRequest('test-password')); assert.equal(signedIn.status, 200);
+  assert.ok(signedIn.headers.get('set-cookie').includes('HttpOnly')); assert.ok(signedIn.headers.get('set-cookie').includes('Secure')); assert.ok(signedIn.headers.get('set-cookie').includes('Max-Age=2592000'));
+  assert.equal((await login.POST(loginRequest('test-password', 'https://evil.example'))).status, 403);
+  const signedOut = await logout.POST(new Request('https://private.example/api/auth/logout', { method: 'POST', headers: { host: 'private.example', origin: 'https://private.example' } }));
+  assert.ok(signedOut.headers.get('set-cookie').includes('Max-Age=0'));
+  assert.doesNotThrow(() => http.guard(new Request('https://private.example/api/threads', { headers: { host: 'private.example', cookie } })));
   queue = [{ body: { data: [{ id: '2' }], paging: { next: 'https://example.invalid/?access_token=secret', cursors: { after: 'cursor' } } } }, { body: me }];
-  let response = await routes.GET(new Request('http://localhost:3000/api/threads', { headers: { host: 'localhost:3000' } }));
+  let response = await routes.GET(new Request('http://localhost:3000/api/threads', { headers: { host: 'localhost:3000', cookie } }));
   assert.equal(response.status, 200);
   const data = await response.json();
   assert.equal(new URL(calls[0].url).searchParams.get('limit'), '10');
   assert.equal(data.after, 'cursor'); assert.equal(data.profile.id, '1'); assert.ok(!JSON.stringify(data).includes('access_token'));
   queue = [{ body: me }, { body: post }, { body: { data: [{ id: '3', root_post: { id: '2' }, replied_to: { id: '4' } }] } }];
-  response = await routes.GET(new Request('http://localhost:3000/api/threads?postId=2&after=abc', { headers: { host: 'localhost:3000' } }));
+  response = await routes.GET(new Request('http://localhost:3000/api/threads?postId=2&after=abc', { headers: { host: 'localhost:3000', cookie } }));
   assert.equal(response.status, 200);
   assert.equal(new URL(calls.at(-1).url).searchParams.get('reverse'), 'true');
   assert.ok(calls.at(-1).url.includes('/2/conversation')); assert.ok(calls.at(-1).url.includes('after=abc'));
@@ -65,7 +95,7 @@ try {
   assert.equal(created.options.body.get('reply_to_id'), '3'); assert.equal(created.options.body.get('text'), 'Hello');
   assert.equal(calls.at(-1).options.body.get('creation_id'), '10');
   queue = [{ status: 400, body: { error: { code: 190, message: 'test-token' } } }];
-  response = await routes.GET(new Request('http://localhost:3000/api/threads', { headers: { host: 'localhost:3000' } }));
+  response = await routes.GET(new Request('http://localhost:3000/api/threads', { headers: { host: 'localhost:3000', cookie } }));
   assert.equal(response.status, 401); assert.ok(!(await response.text()).includes('test-token'));
   assert.ok(calls.every(call => !call.url.includes('test-token')));
   queue = [{ body: me }, { body: post }, { body: { id: '3', text: 'I miss my hometown.', root_post: { id: '2' }, replied_to: { id: '4' } } }, { body: { text: 'Where would you go?' } }, { body: { text: 'I moved away years ago.', root_post: { id: '2' } } }, { body: { candidates: [{ finishReason: 'STOP', content: { parts: [{ thought: true, text: 'Hidden reasoning' }, { text: 'Sounds like it holds a lot of memories. What do you miss most?' }] } }] } }];
@@ -92,10 +122,12 @@ try {
   queue = [{ body: me }, { body: post }, { body: { root_post: { id: '99' } } }];
   response = await generationRoute.POST(postRequest({ postId: '2', replyId: '3' }));
   assert.equal(response.status, 403); assert.equal(queue.length, 0);
+  console.log('Passed: login, password verification, signed/expired sessions, secure cookies, logout, and protected hosted APIs.');
   console.log('Passed: Gemini draft context, output validation, ownership checks, quota handling, and API key sanitization.');
   console.log('Passed: pagination, nested conversation retrieval, origin/local access guards, reply validation, root ownership, create/publish flow, and token error sanitization. No live posts were sent.');
 } finally {
   if (originalGeminiKey === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = originalGeminiKey;
+  for (const [key, value] of Object.entries(authEnv)) { if (value === undefined) delete process.env[key]; else process.env[key] = value; }
   globalThis.fetch = originalFetch;
   if (originalToken === undefined) delete process.env.THREADS_TOKEN; else process.env.THREADS_TOKEN = originalToken;
 }

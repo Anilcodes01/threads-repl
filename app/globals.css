@@ -308,3 +308,18 @@ button, a, .post-card, .search, .composer textarea {
 .shell[data-theme='dark'] .gemini-instructions label { color: #ae9abb; }
 .shell[data-theme='dark'] .instructions-actions .generate-draft { background: #40304f; color: #d3b8eb; }
 @media(max-width: 720px) { .gemini-instructions { margin-left: 16px; margin-right: 16px; } }
+.logout-button { background: transparent; color: #9880af; font-size: 24px; width: 42px; height: 38px; }
+.mobile-logout { display: none; }
+.login-screen { display: grid; place-items: center; min-height: 100dvh; padding: 24px; background: #f7f5fb; }
+.login-card { width: min(420px, 100%); padding: 38px; border: 1px solid #e2daed; background: white; box-shadow: 0 14px 48px #38244908; }
+.login-brand { font-size: 40px; font-weight: 700; margin-bottom: 28px; color: #8463ad; }
+.login-card h1 { margin: 10px 0; }
+.login-card p { color: #95869f; font-size: 13px; line-height: 1.7; margin-bottom: 28px; }
+.login-card label { display: block; color: #796983; font-size: 12px; margin: 18px 0 8px; }
+.login-card input { display: block; width: 100%; padding: 12px; border: 1px solid #ddd3e8; background: #fdfcfe; font: inherit; }
+.login-card input:focus { outline: 2px solid #cbb6e5; outline-offset: 2px; }
+.login-card .primary { width: 100%; margin-top: 24px; font-size: 13px; }
+.login-card .error { margin: 16px 0 0; }
+.login-card small { display: block; text-align: center; margin-top: 18px; font-size: 10px; color: #a69aad; }
+@media(max-width:720px) { .mobile-logout { display: block; margin-left: auto; } .login-card { padding: 28px; } }
+@media(prefers-color-scheme: dark) { .login-screen { background: #17141d; color: #e8dfef; } .login-card { background: #211b29; border-color: #43314f; } .login-card input { background: #18131f; border-color: #554160; color: #e8dfef; } .login-card label { color: #baa3cc; } }

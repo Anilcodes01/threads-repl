@@ -22,7 +22,7 @@ Start the app when ready:
 npm run dev
 ```
 
-Open http://localhost:3000. API access is restricted to `localhost`, `127.0.0.1`, or IPv6 loopback. This is a single-account local tool. Add authentication and authorization before adapting it for public hosting. Do not expose the local server through a proxy or tunnel.
+Open http://localhost:3000. Sign in at `/login` before opening the inbox. All Threads and Gemini APIs require a valid session, including locally. Hosted requests are allowed only for AUTH_APP_ORIGIN or the deployment domains provided by Vercel.
 
 ## Using the inbox
 
@@ -77,3 +77,20 @@ Use the smile icon in the reply composer's toolbar to open `emoji-picker-react`.
 
 Open a comment's reply composer and expand **Gemini instructions**. Add optional guidance such as “Reply in Hindi, keep it short, no emojis,” then choose **Generate draft** or **Regenerate draft**. Regeneration replaces the draft only after a successful response; failures preserve your text. Instructions also apply to the comment's Gemini icon and stay available during the current inbox session until cleared. Instructions are limited to 1,000 characters and are sent to Gemini alongside conversation context. Publishing remains manual.
 
+
+## Private login and Vercel deployment
+
+The configured owner signs in with email and password. The password is stored as a salted scrypt hash, not plaintext. Login creates a signed, HttpOnly, SameSite=Lax browser cookie lasting 30 days, with Secure enabled over HTTPS. Any device can sign in using the same account. Sign out removes that browser's cookie; rotating AUTH_SESSION_SECRET invalidates all sessions, and changing AUTH_PASSWORD_HASH also invalidates previous sessions.
+
+Copy these server environment variables from your local `.env` to **Vercel → Project Settings → Environment Variables**, then redeploy:
+
+- `AUTH_EMAIL`
+- `AUTH_PASSWORD_HASH` (copy the full `scrypt:...` value)
+- `AUTH_SESSION_SECRET`
+- `AUTH_APP_ORIGIN` (exact HTTPS site origin, without a trailing slash)
+- `THREADS_TOKEN`
+- `GEMINI_API_KEY`
+
+The auth values have already been generated locally in `.env`; do not generate a different password hash by copying the plaintext password into AUTH_PASSWORD_HASH. None of these variables should have a NEXT_PUBLIC_ prefix. `.env` remains ignored by Git, so deploying source code alone does not transfer this configuration.
+
+The login endpoint has a per-instance backstop of 10 attempts per 15 minutes. Serverless instances do not share that counter; deployment-wide protection should use the hosting firewall. The session is stored in the browser cookie rather than localStorage so client JavaScript cannot read it.
